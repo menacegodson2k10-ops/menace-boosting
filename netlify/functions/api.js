@@ -2,21 +2,38 @@ const express = require("express");
 const serverless = require("serverless-http");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { getStore } = require("@netlify/blobs");
+const {
+  getStore,
+  connectLambda
+} = require("@netlify/blobs");
 
 const app = express();
 
 app.use(express.json());
 
-const JWT_SECRET = process.env.JWT_SECRET || "change-this-secret";
-const EXOSUPPLIER_API_URL =
-  process.env.EXOSUPPLIER_API_URL || "https://exosupplier.com/api/v2";
+const JWT_SECRET =
+  process.env.JWT_SECRET || "change-this-secret";
 
-const store = () => getStore("menace-boosting-data");
+const EXOSUPPLIER_API_URL =
+  process.env.EXOSUPPLIER_API_URL ||
+  "https://exosupplier.com/api/v2";
+
+const store = () =>
+  getStore("menace-boosting-data");
 
 async function read(key, fallback) {
-  const value = await store().get(key, { type: "json" });
-  return value === null || value === undefined ? fallback : value;
+  const value = await store().get(key, {
+    type: "json"
+  });
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return fallback;
+  }
+
+  return value;
 }
 
 async function write(key, value) {
@@ -26,7 +43,9 @@ async function write(key, value) {
 
 async function nextId(name) {
   const key = `counter:${name}`;
+
   const current = await read(key, 0);
+
   const next = Number(current) + 1;
 
   await write(key, next);
@@ -35,23 +54,33 @@ async function nextId(name) {
 }
 
 async function callExoSupplier(data) {
-  const apiKey = process.env.EXOSUPPLIER_API_KEY;
+  const apiKey =
+    process.env.EXOSUPPLIER_API_KEY;
 
   if (!apiKey) {
-    throw new Error("ExoSupplier API key is not configured in Netlify.");
+    throw new Error(
+      "ExoSupplier API key is not configured in Netlify."
+    );
   }
 
-  const response = await fetch(EXOSUPPLIER_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json"
-    },
-    body: new URLSearchParams({
-      key: apiKey,
-      ...data
-    })
-  });
+  const response = await fetch(
+    EXOSUPPLIER_API_URL,
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type":
+          "application/x-www-form-urlencoded",
+
+        Accept: "application/json"
+      },
+
+      body: new URLSearchParams({
+        key: apiKey,
+        ...data
+      })
+    }
+  );
 
   const text = await response.text();
 
@@ -66,11 +95,15 @@ async function callExoSupplier(data) {
   }
 
   if (!response.ok) {
-    throw new Error(`ExoSupplier HTTP error: ${response.status}`);
+    throw new Error(
+      `ExoSupplier HTTP error: ${response.status}`
+    );
   }
 
   if (result.error) {
-    throw new Error(String(result.error));
+    throw new Error(
+      String(result.error)
+    );
   }
 
   return result;
@@ -89,258 +122,406 @@ function createToken(user) {
   );
 }
 
-function authenticate(req, res, next) {
+function authenticate(
+  req,
+  res,
+  next
+) {
   try {
-    const header = req.headers.authorization || "";
+    const header =
+      req.headers.authorization || "";
 
-    if (!header.startsWith("Bearer ")) {
+    if (
+      !header.startsWith("Bearer ")
+    ) {
       return res.status(401).json({
-        error: "Authentication required."
+        error:
+          "Authentication required."
       });
     }
 
-    const token = header.substring(7);
+    const token =
+      header.substring(7);
 
-    req.user = jwt.verify(token, JWT_SECRET);
+    req.user =
+      jwt.verify(
+        token,
+        JWT_SECRET
+      );
 
     next();
   } catch {
     return res.status(401).json({
-      error: "Invalid or expired login session."
+      error:
+        "Invalid or expired login session."
     });
   }
 }
 
-function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== "admin") {
+function requireAdmin(
+  req,
+  res,
+  next
+) {
+  if (
+    !req.user ||
+    req.user.role !== "admin"
+  ) {
     return res.status(403).json({
-      error: "Administrator access required."
+      error:
+        "Administrator access required."
     });
   }
 
   next();
 }
 
+
 /* =========================
    HEALTH CHECK
 ========================= */
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "Menace Boosting API"
-  });
-});
+app.get(
+  "/api/health",
+  (req, res) => {
+    res.json({
+      ok: true,
+      service:
+        "Menace Boosting API"
+    });
+  }
+);
+
 
 /* =========================
    REGISTER
 ========================= */
 
-app.post("/api/auth/register", async (req, res) => {
-  try {
-    const email = String(req.body.email || "")
-      .trim()
-      .toLowerCase();
+app.post(
+  "/api/auth/register",
+  async (req, res) => {
+    try {
+      const email =
+        String(
+          req.body.email || ""
+        )
+          .trim()
+          .toLowerCase();
 
-    const password = String(req.body.password || "");
+      const password =
+        String(
+          req.body.password || ""
+        );
 
-    if (!email || password.length < 6) {
-      return res.status(400).json({
-        error: "Enter a valid email and a password of at least 6 characters."
-      });
-    }
-
-    const users = await read("users", []);
-
-    const existingUser = users.find(
-      user => user.email === email
-    );
-
-    if (existingUser) {
-      return res.status(400).json({
-        error: "An account with this email already exists."
-      });
-    }
-
-    const user = {
-      id: await nextId("users"),
-      email,
-      password: await bcrypt.hash(password, 10),
-      role: "user",
-      balance: 0,
-      created_at: new Date().toISOString()
-    };
-
-    users.push(user);
-
-    await write("users", users);
-
-    const accessToken = createToken(user);
-
-    return res.json({
-      success: true,
-      token: accessToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        balance: user.balance
+      if (
+        !email ||
+        password.length < 6
+      ) {
+        return res.status(400).json({
+          error:
+            "Enter a valid email and a password of at least 6 characters."
+        });
       }
-    });
-  } catch (error) {
-    console.error("REGISTER ERROR:", error);
 
-    return res.status(500).json({
-      error: "Unable to create account."
-    });
+      const users =
+        await read(
+          "users",
+          []
+        );
+
+      const existingUser =
+        users.find(
+          user =>
+            user.email ===
+            email
+        );
+
+      if (existingUser) {
+        return res.status(400).json({
+          error:
+            "An account with this email already exists."
+        });
+      }
+
+      const user = {
+        id:
+          await nextId(
+            "users"
+          ),
+
+        email,
+
+        password:
+          await bcrypt.hash(
+            password,
+            10
+          ),
+
+        role: "user",
+
+        balance: 0,
+
+        created_at:
+          new Date().toISOString()
+      };
+
+      users.push(user);
+
+      await write(
+        "users",
+        users
+      );
+
+      const accessToken =
+        createToken(user);
+
+      return res.json({
+        success: true,
+
+        token:
+          accessToken,
+
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          balance: user.balance
+        }
+      });
+
+    } catch (error) {
+      console.error(
+        "REGISTER ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to create account."
+      });
+    }
   }
-});
+);
+
 
 /* =========================
    LOGIN
 ========================= */
 
-app.post("/api/auth/login", async (req, res) => {
-  try {
-    const email = String(req.body.email || "")
-      .trim()
-      .toLowerCase();
+app.post(
+  "/api/auth/login",
+  async (req, res) => {
+    try {
+      const email =
+        String(
+          req.body.email || ""
+        )
+          .trim()
+          .toLowerCase();
 
-    const password = String(req.body.password || "");
+      const password =
+        String(
+          req.body.password || ""
+        );
 
-    const users = await read("users", []);
+      const users =
+        await read(
+          "users",
+          []
+        );
 
-    const user = users.find(
-      item => item.email === email
-    );
+      const user =
+        users.find(
+          item =>
+            item.email ===
+            email
+        );
 
-    if (!user) {
-      return res.status(401).json({
-        error: "Invalid email or password."
-      });
-    }
-
-    const validPassword = await bcrypt.compare(
-      password,
-      user.password
-    );
-
-    if (!validPassword) {
-      return res.status(401).json({
-        error: "Invalid email or password."
-      });
-    }
-
-    const accessToken = createToken(user);
-
-    return res.json({
-      success: true,
-      token: accessToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        balance: user.balance
+      if (!user) {
+        return res.status(401).json({
+          error:
+            "Invalid email or password."
+        });
       }
-    });
-  } catch (error) {
-    console.error("LOGIN ERROR:", error);
 
-    return res.status(500).json({
-      error: "Unable to log in."
-    });
+      const validPassword =
+        await bcrypt.compare(
+          password,
+          user.password
+        );
+
+      if (!validPassword) {
+        return res.status(401).json({
+          error:
+            "Invalid email or password."
+        });
+      }
+
+      const accessToken =
+        createToken(user);
+
+      return res.json({
+        success: true,
+
+        token:
+          accessToken,
+
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          balance: user.balance
+        }
+      });
+
+    } catch (error) {
+      console.error(
+        "LOGIN ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to log in."
+      });
+    }
   }
-});
+);
+
 
 /* =========================
    CURRENT USER
 ========================= */
 
-app.get("/api/me", authenticate, async (req, res) => {
-  try {
-    const users = await read("users", []);
+app.get(
+  "/api/me",
+  authenticate,
+  async (req, res) => {
+    try {
+      const users =
+        await read(
+          "users",
+          []
+        );
 
-    const user = users.find(
-      item => item.id === req.user.id
-    );
+      const user =
+        users.find(
+          item =>
+            item.id ===
+            req.user.id
+        );
 
-    if (!user) {
-      return res.status(404).json({
-        error: "User not found."
+      if (!user) {
+        return res.status(404).json({
+          error:
+            "User not found."
+        });
+      }
+
+      return res.json({
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        balance: user.balance,
+        created_at:
+          user.created_at
+      });
+
+    } catch (error) {
+      console.error(
+        "ME ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to load account."
       });
     }
-
-    return res.json({
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      balance: user.balance,
-      created_at: user.created_at
-    });
-  } catch (error) {
-    console.error("ME ERROR:", error);
-
-    return res.status(500).json({
-      error: "Unable to load account."
-    });
   }
-});
+);
+
 
 /* =========================
    CATEGORIES
 ========================= */
 
-app.get("/api/categories", async (req, res) => {
-  const categories = await read("categories", [
-    {
-      id: 1,
-      name: "Instagram"
-    },
-    {
-      id: 2,
-      name: "TikTok"
-    },
-    {
-      id: 3,
-      name: "YouTube"
-    },
-    {
-      id: 4,
-      name: "Facebook"
-    },
-    {
-      id: 5,
-      name: "Other"
-    }
-  ]);
+app.get(
+  "/api/categories",
+  async (req, res) => {
+    const categories =
+      await read(
+        "categories",
+        [
+          {
+            id: 1,
+            name: "Instagram"
+          },
+          {
+            id: 2,
+            name: "TikTok"
+          },
+          {
+            id: 3,
+            name: "YouTube"
+          },
+          {
+            id: 4,
+            name: "Facebook"
+          },
+          {
+            id: 5,
+            name: "Other"
+          }
+        ]
+      );
 
-  return res.json(categories);
-});
+    return res.json(
+      categories
+    );
+  }
+);
+
 
 /* =========================
    SERVICES
 ========================= */
 
-app.get("/api/services", authenticate, async (req, res) => {
-  try {
-    const services = await read("services", []);
+app.get(
+  "/api/services",
+  authenticate,
+  async (req, res) => {
+    try {
+      const services =
+        await read(
+          "services",
+          []
+        );
 
-    return res.json(
-      services.filter(
-        service => service.active !== false
-      )
-    );
-  } catch (error) {
-    console.error("SERVICES ERROR:", error);
+      return res.json(
+        services.filter(
+          service =>
+            service.active !== false
+        )
+      );
 
-    return res.status(500).json({
-      error: "Unable to load services."
-    });
+    } catch (error) {
+      console.error(
+        "SERVICES ERROR:",
+        error
+      );
+
+      return res.status(500).json({
+        error:
+          "Unable to load services."
+      });
+    }
   }
-});
+);
+
 
 /* =========================
-   ADMIN - SYNC SERVICES
+   ADMIN SYNC SERVICES
 ========================= */
 
 app.post(
@@ -349,61 +530,92 @@ app.post(
   requireAdmin,
   async (req, res) => {
     try {
-      const supplierData = await callExoSupplier({
-        action: "services"
-      });
+      const supplierData =
+        await callExoSupplier({
+          action:
+            "services"
+        });
 
-      const serviceList = Array.isArray(supplierData)
-        ? supplierData
-        : supplierData.services || [];
+      const serviceList =
+        Array.isArray(
+          supplierData
+        )
+          ? supplierData
+          : supplierData.services ||
+            [];
 
-      const services = serviceList.map(
-        (service, index) => ({
-          id: index + 1,
+      const services =
+        serviceList.map(
+          (service, index) => ({
+            id:
+              index + 1,
 
-          supplier_id: String(
-            service.service ?? service.id ?? ""
-          ),
+            supplier_id:
+              String(
+                service.service ??
+                service.id ??
+                ""
+              ),
 
-          name: service.name || "Unnamed service",
+            name:
+              service.name ||
+              "Unnamed service",
 
-          category:
-            service.category || "Other",
+            category:
+              service.category ||
+              "Other",
 
-          rate: Number(
-            service.rate ||
-            service.price ||
-            0
-          ),
+            rate:
+              Number(
+                service.rate ||
+                service.price ||
+                0
+              ),
 
-          min: Number(
-            service.min || 1
-          ),
+            min:
+              Number(
+                service.min ||
+                1
+              ),
 
-          max: Number(
-            service.max || 999999
-          ),
+            max:
+              Number(
+                service.max ||
+                999999
+              ),
 
-          refill:
-            service.refill === true ||
-            service.refill === 1 ||
-            service.refill === "1",
+            refill:
+              service.refill ===
+                true ||
+              service.refill ===
+                1 ||
+              service.refill ===
+                "1",
 
-          cancel:
-            service.cancel === true ||
-            service.cancel === 1 ||
-            service.cancel === "1",
+            cancel:
+              service.cancel ===
+                true ||
+              service.cancel ===
+                1 ||
+              service.cancel ===
+                "1",
 
-          active: true
-        })
+            active:
+              true
+          })
+        );
+
+      await write(
+        "services",
+        services
       );
-
-      await write("services", services);
 
       return res.json({
         success: true,
-        count: services.length
+        count:
+          services.length
       });
+
     } catch (error) {
       console.error(
         "SERVICE SYNC ERROR:",
@@ -411,11 +623,13 @@ app.post(
       );
 
       return res.status(502).json({
-        error: error.message
+        error:
+          error.message
       });
     }
   }
 );
+
 
 /* =========================
    CREATE ORDER
@@ -426,45 +640,57 @@ app.post(
   authenticate,
   async (req, res) => {
     try {
-      const serviceId = Number(
-        req.body.serviceId
-      );
+      const serviceId =
+        Number(
+          req.body.serviceId
+        );
 
-      const quantity = Number(
-        req.body.quantity
-      );
+      const quantity =
+        Number(
+          req.body.quantity
+        );
 
-      const link = String(
-        req.body.link || ""
-      ).trim();
+      const link =
+        String(
+          req.body.link || ""
+        ).trim();
 
-      const services = await read(
-        "services",
-        []
-      );
+      const services =
+        await read(
+          "services",
+          []
+        );
 
-      const service = services.find(
-        item =>
-          item.id === serviceId &&
-          item.active !== false
-      );
+      const service =
+        services.find(
+          item =>
+            item.id ===
+              serviceId &&
+            item.active !== false
+        );
 
       if (!service) {
         return res.status(400).json({
-          error: "Service not found."
+          error:
+            "Service not found."
         });
       }
 
       if (!link) {
         return res.status(400).json({
-          error: "Enter a valid link."
+          error:
+            "Enter a valid link."
         });
       }
 
       if (
-        !Number.isInteger(quantity) ||
-        quantity < service.min ||
-        quantity > service.max
+        !Number.isInteger(
+          quantity
+        ) ||
+        quantity <
+          service.min ||
+        quantity >
+          service.max
       ) {
         return res.status(400).json({
           error:
@@ -472,57 +698,77 @@ app.post(
         });
       }
 
-      const users = await read(
-        "users",
-        []
-      );
+      const users =
+        await read(
+          "users",
+          []
+        );
 
-      const user = users.find(
-        item => item.id === req.user.id
-      );
+      const user =
+        users.find(
+          item =>
+            item.id ===
+            req.user.id
+        );
 
       if (!user) {
         return res.status(404).json({
-          error: "User not found."
+          error:
+            "User not found."
         });
       }
 
-      const charge = Number(
-        (
-          quantity *
-          Number(service.rate || 0) /
-          1000
-        ).toFixed(4)
-      );
+      const charge =
+        Number(
+          (
+            quantity *
+            Number(
+              service.rate || 0
+            ) /
+            1000
+          ).toFixed(4)
+        );
 
-      if (user.balance < charge) {
+      if (
+        user.balance <
+        charge
+      ) {
         return res.status(400).json({
-          error: "Insufficient wallet balance."
+          error:
+            "Insufficient wallet balance."
         });
       }
 
-      user.balance = Number(
-        (
-          user.balance - charge
-        ).toFixed(4)
-      );
+      user.balance =
+        Number(
+          (
+            user.balance -
+            charge
+          ).toFixed(4)
+        );
 
       await write(
         "users",
         users
       );
 
-      const orders = await read(
-        "orders",
-        []
-      );
+      const orders =
+        await read(
+          "orders",
+          []
+        );
 
       const order = {
-        id: await nextId("orders"),
+        id:
+          await nextId(
+            "orders"
+          ),
 
-        user_id: user.id,
+        user_id:
+          user.id,
 
-        service_id: service.id,
+        service_id:
+          service.id,
 
         service_name:
           service.name,
@@ -546,7 +792,9 @@ app.post(
           new Date().toISOString()
       };
 
-      orders.unshift(order);
+      orders.unshift(
+        order
+      );
 
       await write(
         "orders",
@@ -556,7 +804,8 @@ app.post(
       try {
         const supplierResult =
           await callExoSupplier({
-            action: "add",
+            action:
+              "add",
 
             service:
               service.supplier_id,
@@ -564,7 +813,9 @@ app.post(
             link,
 
             quantity:
-              String(quantity)
+              String(
+                quantity
+              )
           });
 
         order.supplier_order_id =
@@ -581,18 +832,24 @@ app.post(
 
         return res.json({
           success: true,
-          orderId: order.id,
+          orderId:
+            order.id,
           charge
         });
-      } catch (supplierError) {
+
+      } catch (
+        supplierError
+      ) {
         order.status =
           "supplier_error";
 
-        user.balance = Number(
-          (
-            user.balance + charge
-          ).toFixed(4)
-        );
+        user.balance =
+          Number(
+            (
+              user.balance +
+              charge
+            ).toFixed(4)
+          );
 
         await write(
           "orders",
@@ -609,6 +866,7 @@ app.post(
             supplierError.message
         });
       }
+
     } catch (error) {
       console.error(
         "ORDER ERROR:",
@@ -622,6 +880,7 @@ app.post(
     }
   }
 );
+
 
 /* =========================
    ORDER HISTORY
@@ -645,6 +904,7 @@ app.get(
             req.user.id
         )
       );
+
     } catch (error) {
       console.error(
         "ORDER HISTORY ERROR:",
@@ -659,8 +919,9 @@ app.get(
   }
 );
 
+
 /* =========================
-   DEPOSIT REQUEST
+   DEPOSITS
 ========================= */
 
 app.post(
@@ -668,11 +929,15 @@ app.post(
   authenticate,
   async (req, res) => {
     try {
-      const amount = Number(
-        req.body.amount
-      );
+      const amount =
+        Number(
+          req.body.amount
+        );
 
-      if (!amount || amount <= 0) {
+      if (
+        !amount ||
+        amount <= 0
+      ) {
         return res.status(400).json({
           error:
             "Enter a valid deposit amount."
@@ -722,8 +987,10 @@ app.post(
 
       return res.json({
         success: true,
-        id: deposit.id
+        id:
+          deposit.id
       });
+
     } catch (error) {
       console.error(
         "DEPOSIT ERROR:",
@@ -737,6 +1004,7 @@ app.post(
     }
   }
 );
+
 
 /* =========================
    ADMIN SUMMARY
@@ -768,10 +1036,14 @@ app.get(
 
       const revenue =
         orders.reduce(
-          (total, order) =>
+          (
+            total,
+            order
+          ) =>
             total +
             Number(
-              order.charge || 0
+              order.charge ||
+              0
             ),
           0
         );
@@ -792,6 +1064,7 @@ app.get(
 
         revenue
       });
+
     } catch (error) {
       console.error(
         "ADMIN SUMMARY ERROR:",
@@ -805,6 +1078,7 @@ app.get(
     }
   }
 );
+
 
 /* =========================
    ADMIN DEPOSITS
@@ -843,6 +1117,7 @@ app.get(
           })
         )
       );
+
     } catch (error) {
       console.error(
         "ADMIN DEPOSITS ERROR:",
@@ -857,6 +1132,7 @@ app.get(
   }
 );
 
+
 /* =========================
    APPROVE DEPOSIT
 ========================= */
@@ -868,7 +1144,9 @@ app.post(
   async (req, res) => {
     try {
       const depositId =
-        Number(req.params.id);
+        Number(
+          req.params.id
+        );
 
       const deposits =
         await read(
@@ -924,7 +1202,8 @@ app.post(
         Number(
           (
             Number(
-              user.balance || 0
+              user.balance ||
+              0
             ) +
             Number(
               deposit.amount
@@ -938,117 +1217,14 @@ app.post(
       );
 
       return res.json({
-        success: true
+        success:
+          true
       });
+
     } catch (error) {
       console.error(
         "APPROVE DEPOSIT ERROR:",
         error
       );
 
-      return res.status(500).json({
-        error:
-          "Unable to approve deposit."
-      });
-    }
-  }
-);
-
-/* =========================
-   REJECT DEPOSIT
-========================= */
-
-app.post(
-  "/api/admin/deposits/:id/reject",
-  authenticate,
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const depositId =
-        Number(req.params.id);
-
-      const deposits =
-        await read(
-          "deposits",
-          []
-        );
-
-      const deposit =
-        deposits.find(
-          item =>
-            item.id ===
-            depositId
-        );
-
-      if (!deposit) {
-        return res.status(404).json({
-          error:
-            "Deposit not found."
-        });
-      }
-
-      deposit.status =
-        "rejected";
-
-      await write(
-        "deposits",
-        deposits
-      );
-
-      return res.json({
-        success: true
-      });
-    } catch (error) {
-      console.error(
-        "REJECT DEPOSIT ERROR:",
-        error
-      );
-
-      return res.status(500).json({
-        error:
-          "Unable to reject deposit."
-      });
-    }
-  }
-);
-
-/* =========================
-   SUPPLIER BALANCE
-========================= */
-
-app.get(
-  "/api/supplier/balance",
-  authenticate,
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const result =
-        await callExoSupplier({
-          action:
-            "balance"
-        });
-
-      return res.json({
-        success: true,
-        data: result
-      });
-    } catch (error) {
-      console.error(
-        "SUPPLIER BALANCE ERROR:",
-        error
-      );
-
-      return res.status(502).json({
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* =========================
-   EXPORT NETLIFY FUNCTION
-========================= */
-
-exports.handler =
-  serverless(app);
+      return res.status(50
