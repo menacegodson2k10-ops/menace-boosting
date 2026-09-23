@@ -1,0 +1,1 @@
+Menace Boosting Netlify version. Upload to GitHub, import into Netlify, use build `npm run build`, publish `public`, functions `netlify/functions`. Set JWT_SECRET, EXOSUPPLIER_API_URL, EXOSUPPLIER_API_KEY, ADMIN_EMAIL, ADMIN_PASSWORD in Netlify Environment Variables. Never commit the API key.
