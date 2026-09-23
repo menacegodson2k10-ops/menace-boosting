@@ -12,10 +12,11 @@ const API_URL =
   process.env.EXOSUPPLIER_API_URL || "https://exosupplier.com/api/v2";
 
 const store = () =>
-  getStore({
-    name: "menace-boosting-data",
-    consistency: "strong"
-  });
+  getStore("menace-boosting-data");
+  
+    
+    
+
 
 async function read(key, fallback) {
   const value = await store().get(key, { type: "json" });
